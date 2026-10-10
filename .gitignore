@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# 由安装向导生成的配置文件，内含数据库密码与令牌密钥，切勿提交
+config.py
+
+# 其它
+*.log
+test*.xls
