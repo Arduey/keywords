@@ -41,12 +41,12 @@ async function pushOrder() {
     });
     if (!resp.ok) {
       const d = await resp.json().catch(() => ({}));
-      document.getElementById('statusBar').textContent = '排序保存失败: ' + (d.error || resp.status);
+      toast('排序保存失败: ' + (d.error || resp.status), 'err');
     } else {
-      document.getElementById('statusBar').textContent = '排序已保存';
+      toast('排序已保存', 'ok');
     }
   } catch (e) {
-    document.getElementById('statusBar').textContent = '排序保存失败: ' + e.message;
+    toast('排序保存失败: ' + e.message, 'err');
   }
 }
 
@@ -57,6 +57,63 @@ function authHeaders(extra) {
   if (authToken) h['X-Auth'] = authToken;
   return h;
 }
+
+// ========== 操作反馈 ==========
+// 目的：让每次点击都有即时可见的回应，避免“不知道有没有点到”而重复操作。
+// 三样东西：顶部进度条（进行中）、按钮转圈（进行中）、右上角提示（已完成）。
+
+let busyCount = 0;
+
+function startBusy() {
+  busyCount++;
+  const bar = document.getElementById('topbar');
+  if (bar) bar.classList.add('active');
+}
+
+function endBusy() {
+  busyCount = Math.max(0, busyCount - 1);
+  if (busyCount === 0) {
+    const bar = document.getElementById('topbar');
+    if (bar) bar.classList.remove('active');
+  }
+}
+
+// 包住一段异步操作，自动显示/隐藏进度条
+async function withBusy(fn) {
+  startBusy();
+  try { return await fn(); }
+  finally { endBusy(); }
+}
+
+let toastTimer = null;
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'toast show' + (type ? ' ' + type : '');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast' + (type ? ' ' + type : ''); }, 2200);
+}
+
+// 把按钮切到“处理中”：禁用 + 转圈 + 改文字，结束后恢复原样
+function setBtnLoading(btn, loading, loadingText, idleHTML) {
+  if (!btn) return;
+  if (loading) {
+    btn.dataset.idleHtml = idleHTML || btn.innerHTML;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    const dark = btn.classList.contains('btn-outline') || btn.classList.contains('btn-header');
+    btn.innerHTML = '<span class="spinner' + (dark ? ' dark' : '') + '"></span> ' + (loadingText || '处理中...');
+  } else {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.innerHTML = idleHTML || btn.dataset.idleHtml || btn.innerHTML;
+  }
+}
+
+// 确认框：浏览器原生 confirm，用于删除这类不可逆操作
+function confirmAction(msg) { return window.confirm(msg); }
+
 function logout() {
   // 离开前把尚未提交的排序改动存回去，避免拖动后马上退出导致丢失
   if (orderDirty) { try { pushOrder(); } catch (e) {} }
@@ -66,10 +123,18 @@ function logout() {
   document.getElementById('loginOverlay').style.display = 'flex';
   document.getElementById('passwordInput').value = '';
 }
+// 所有接口请求都走这里，自动带令牌、401 退回登录页、并显示顶部进度条。
+// 进度条由这里统一负责，各业务函数不必重复处理。
 async function apiFetch(url, options) {
   const opts = Object.assign({}, options || {});
   opts.headers = authHeaders(opts.headers);
-  const resp = await fetch(url, opts);
+  startBusy();
+  let resp;
+  try {
+    resp = await fetch(url, opts);
+  } finally {
+    endBusy();
+  }
   if (resp.status === 401) { logout(); throw new Error('登录已过期，请重新登录'); }
   return resp;
 }
@@ -85,12 +150,24 @@ async function checkAuth() {
 async function verifyPassword() {
   const pwd = document.getElementById('passwordInput').value.trim();
   if (!pwd) return;
+  const btn = document.querySelector('.login-card .btn-primary');
+  const errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+  setBtnLoading(btn, true, '验证中...', '验证');
   try {
-    const resp = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pwd }) });
+    const resp = await apiFetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pwd }) });
     const data = await resp.json();
-    if (data.ok) { authToken = data.token; if (document.getElementById('rememberPwd').checked) localStorage.setItem('kw_auth', authToken); showMain(); document.getElementById('loginError').style.display = 'none'; }
-    else document.getElementById('loginError').style.display = 'block';
-  } catch(e) { document.getElementById('loginError').style.display = 'block'; }
+    if (data.ok) {
+      authToken = data.token;
+      if (document.getElementById('rememberPwd').checked) localStorage.setItem('kw_auth', authToken);
+      showMain();
+    } else {
+      errEl.style.display = 'block';
+    }
+  } catch(e) {
+    errEl.style.display = 'block';
+  }
+  setBtnLoading(btn, false, '', '验证');
 }
 async function showMain() {
   document.getElementById('loginOverlay').style.display = 'none';
@@ -100,14 +177,22 @@ async function showMain() {
 }
 
 // ========== Data Loading ==========
-async function refreshData() {
+async function refreshData(btn) {
+  const idle = btn ? btn.innerHTML : null;
+  if (btn) setBtnLoading(btn, true, '刷新中...', idle);
   try {
     const resp = await apiFetch('/api/data');
     if (!resp.ok) { logout(); return; }
     allData = await resp.json();
     renderTabs(); renderPreview();
-    document.getElementById('statusBar').textContent = `共 ${Object.keys(allData).length} 个产品，最后更新: ${new Date().toLocaleString()}`;
-  } catch (err) { document.getElementById('statusBar').textContent = '加载失败: ' + err.message; }
+    const n = Object.keys(allData).length;
+    document.getElementById('statusBar').textContent = `共 ${n} 个产品，最后更新: ${new Date().toLocaleString()}`;
+    if (btn) toast(`已刷新，共 ${n} 个产品`, 'ok');
+  } catch (err) {
+    document.getElementById('statusBar').textContent = '加载失败: ' + err.message;
+    if (btn) toast('刷新失败: ' + err.message, 'err');
+  }
+  if (btn) setBtnLoading(btn, false, '', idle);
 }
 
 // ========== Import (always force overwrite) ==========
@@ -122,45 +207,62 @@ function toggleImport(force) {
 
 async function importData() {
   const input = document.getElementById('jsonInput').value.trim();
-  if (!input) return alert('请粘贴 JSON 数据');
+  const status = document.getElementById('importStatus');
+  if (!input) { toast('请先粘贴 JSON 数据', 'err'); return; }
   let data;
   try { data = JSON.parse(input); } catch (e) {
-    document.getElementById('importStatus').innerHTML = '<div class="alert alert-error">JSON 解析失败: ' + e.message + '</div>'; return;
+    status.innerHTML = '<div class="alert alert-error">JSON 解析失败: ' + e.message + '</div>';
+    toast('JSON 格式有误', 'err');
+    return;
   }
   const btn = document.getElementById('importBtn');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 提交中...';
-  document.getElementById('importStatus').innerHTML = '';
+  setBtnLoading(btn, true, '提交中...', '📤 提交数据 (直接覆盖)');
+  status.innerHTML = '<div class="alert alert-info">正在导入，请勿重复点击…</div>';
   try {
     const resp = await apiFetch('/api/import?force=true', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
     const result = await resp.json();
     if (result.status === 'success') {
-      document.getElementById('importStatus').innerHTML = '<div class="alert alert-success">✅ 导入成功！' + result.products + ' 个产品，' + result.rankings + ' 条排名记录</div>';
-      document.getElementById('jsonInput').value = ''; refreshData();
+      status.innerHTML = '<div class="alert alert-success">✅ 导入成功！' + result.products + ' 个产品，' + result.rankings + ' 条排名记录</div>';
+      toast(`导入成功：${result.products} 个产品 / ${result.rankings} 条记录`, 'ok');
+      document.getElementById('jsonInput').value = '';
+      refreshData();
       // 导入完成即收起，把版面让给数据预览
       setTimeout(() => toggleImport(false), 1500);
-    } else throw new Error(result.error || 'Unknown error');
-  } catch (err) { document.getElementById('importStatus').innerHTML = '<div class="alert alert-error">❌ 导入失败: ' + err.message + '</div>'; }
-  btn.disabled = false; btn.innerHTML = '📤 提交数据';
+    } else {
+      throw new Error(result.error || 'Unknown error');
+    }
+  } catch (err) {
+    status.innerHTML = '<div class="alert alert-error">❌ 导入失败: ' + err.message + '</div>';
+    toast('导入失败: ' + err.message, 'err');
+  }
+  setBtnLoading(btn, false, '', '📤 提交数据 (直接覆盖)');
 }
 
 // ========== Export ==========
 // 导出时不再需要传 order：服务器已保存排序，后端会自己按它排列。
 // 这样即使换了浏览器或清了缓存，导出的顺序也保持一致。
 function exportUrl(asin) { return asin ? '/api/export?asin=' + encodeURIComponent(asin) : '/api/export'; }
-async function downloadExcel(asin) {
+
+async function downloadExcel(asin, btn, label) {
+  const idle = btn ? btn.innerHTML : null;
+  if (btn) setBtnLoading(btn, true, '生成中...', idle);
   try {
     const r = await apiFetch(exportUrl(asin));
-    if (!r.ok) throw new Error('导出失败');
+    if (!r.ok) throw new Error('服务器返回 ' + r.status);
     const b = await r.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(b);
     a.download = '\u5173\u952E\u8BCD\u8BB0\u5F55.xls';
     a.click();
     URL.revokeObjectURL(a.href);
-  } catch(e) { alert('导出失败: ' + e.message); }
+    toast((label || 'Excel') + ' 已开始下载', 'ok');
+  } catch(e) {
+    toast('导出失败: ' + e.message, 'err');
+  }
+  if (btn) setBtnLoading(btn, false, '', idle);
 }
-function exportExcel() { return downloadExcel(''); }
-function exportSingle(asin) { return downloadExcel(asin); }
+function exportExcel(btn) { return downloadExcel('', btn, '全部产品 Excel'); }
+function exportSingle(asin, btn) { return downloadExcel(asin, btn, '该产品 Excel'); }
 
 // ========== Multi-Delete ==========
 function showDeleteModal(asin) {
@@ -199,13 +301,19 @@ async function confirmDelete() {
   }
   
   if (!confirm(`确定删除 ${asin} 从 ${start} 到 ${end} 共 ${dates.length} 天的数据？`)) return;
-  
+
+  const btn = document.getElementById('deleteConfirmBtn');
+  setBtnLoading(btn, true, '删除中...', '确认删除');
+  // 逐天删除，同时把进度显示在按钮上，让人知道确实在跑
   let success = 0;
-  for (const ds of dates) {
+  for (let i = 0; i < dates.length; i++) {
+    const ds = dates[i];
+    if (i > 0) btn.innerHTML = '<span class="spinner"></span> 删除中 ' + i + '/' + dates.length + '...';
     try { const r = await apiFetch(`/api/data?asin=${encodeURIComponent(asin)}&date=${encodeURIComponent(ds)}`, { method: 'DELETE' }); if (r.ok) success++; } catch(e) {}
   }
-  alert(`✅ 已删除 ${success}/${dates.length} 天数据`);
+  setBtnLoading(btn, false, '', '确认删除');
   closeDeleteModal();
+  toast(`已删除 ${success}/${dates.length} 天数据`, success === dates.length ? 'ok' : 'err');
   refreshData();
 }
 
@@ -287,7 +395,7 @@ function renderPreview() {
   html += '<div class="row" style="margin-top:8px;">';
   html += '<button class="btn btn-danger btn-sm" onclick="showDeleteModal(\'' + asin + '\')">🗑 删除数据</button>';
   html += '<span style="flex:1;"></span>';
-  html += '<button class="btn btn-outline btn-sm" onclick="exportSingle(\'' + asin + '\')">📥 导出此产品</button>';
+  html += '<button class="btn btn-outline btn-sm" onclick="exportSingle(\'' + asin + '\', this)">📥 导出此产品</button>';
   html += '</div>';
   container.innerHTML = html;
 }
@@ -324,18 +432,30 @@ async function deleteKeyword(asin, keyword) {
   try {
     const resp = await apiFetch('/api/data?asin=' + encodeURIComponent(asin) + '&keyword=' + encodeURIComponent(keyword), { method: 'DELETE' });
     const result = await resp.json();
-    if (result.status === 'deleted') { alert('✅ 已删除 ' + result.changes + ' 条记录'); refreshData(); }
-  } catch(e) { alert('删除失败: ' + e.message); }
+    if (result.status === 'deleted') {
+      toast('已删除 ' + result.changes + ' 条记录', 'ok');
+      refreshData();
+    } else {
+      toast('删除失败: ' + (result.error || '未知错误'), 'err');
+    }
+  } catch(e) { toast('删除失败: ' + e.message, 'err'); }
 }
 
 async function renameProduct(asin) {
   const newName = prompt('请输入新名称:', (allData[asin] && allData[asin].name) || '');
   if (!newName) return;
+  const trimmed = newName.trim();
+  if (!trimmed) { toast('名称不能为空', 'err'); return; }
   try {
-    const resp = await apiFetch('/api/data', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asin, name: newName }) });
+    const resp = await apiFetch('/api/data', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asin, name: trimmed }) });
     const result = await resp.json();
-    if (result.status === 'updated') { refreshData(); }
-  } catch(e) { alert('修改失败: ' + e.message); }
+    if (result.status === 'updated') {
+      toast('名称已改为「' + trimmed + '」', 'ok');
+      refreshData();
+    } else {
+      toast('修改失败: ' + (result.error || '未知错误'), 'err');
+    }
+  } catch(e) { toast('修改失败: ' + e.message, 'err'); }
 }
 
 // 按保存的产品顺序排列；未列出的（新增产品）按字母序接在后面。

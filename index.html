@@ -13,6 +13,9 @@ body { font-family: "等线", "DengXian", "Microsoft YaHei", sans-serif; backgro
 .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 20px; margin-bottom: 16px; }
 .card-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 8px; }
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-family: inherit; transition: all .2s; }
+.btn:active:not(:disabled) { transform: scale(.96); }
+/* 提交中：按钮保持不可点，并用旋转圈表示正在处理 */
+.btn.loading { pointer-events: none; }
 .btn-primary { background: #1a73e8; color: #fff; }
 .btn-primary:hover { background: #1557b0; }
 .btn-success { background: #0d904f; color: #fff; }
@@ -67,6 +70,26 @@ table.preview .row-normal { height: 26px; }
 .modal .conflict-list div { padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; }
+/* 深色按钮（描边样式）上的转圈要用深色，否则看不见 */
+.spinner.dark { border-color: #1a73e8; border-top-color: transparent; }
+/* 页面顶部的进度条：任何耗时操作开始时出现，结束后消失 */
+.topbar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 99999;
+          background: transparent; overflow: hidden; pointer-events: none; }
+.topbar::after { content: ''; display: block; height: 100%; width: 40%;
+                 background: linear-gradient(90deg, transparent, #1a73e8, transparent);
+                 transform: translateX(-100%); }
+.topbar.active::after { animation: slide 1s linear infinite; }
+@keyframes slide { to { transform: translateX(350%); } }
+/* 操作完成后在右上角弹一个短提示，明确「已经点到并完成」 */
+.toast { position: fixed; top: 16px; right: 16px; z-index: 100000;
+         display: flex; align-items: center; gap: 8px;
+         padding: 10px 16px; border-radius: 8px; font-size: 13px;
+         color: #fff; background: #323232; box-shadow: 0 4px 16px rgba(0,0,0,.2);
+         opacity: 0; transform: translateY(-8px); transition: opacity .18s, transform .18s;
+         pointer-events: none; max-width: 320px; }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.ok { background: #0d904f; }
+.toast.err { background: #d93025; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .kw-drag:hover { background: #e8f0fe; }
 .kw-drag td:first-child { cursor: grab; }
@@ -79,6 +102,9 @@ input[type="password"]:focus { outline: none; border-color: #1a73e8; }
 </style>
 </head>
 <body>
+
+<div class="topbar" id="topbar"></div>
+<div class="toast" id="toast"></div>
 
 <div id="loginOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:9999;align-items:center;justify-content:center;">
   <div class="login-card">
@@ -98,8 +124,8 @@ input[type="password"]:focus { outline: none; border-color: #1a73e8; }
 <div class="header">
   <h1>📊 关键词排名管理系统</h1>
   <div style="display:flex;gap:8px;">
-    <button class="btn btn-header" onclick="refreshData()">🔄 刷新数据</button>
-    <button class="btn btn-success" onclick="exportExcel()">📥 导出全部 Excel</button>
+    <button class="btn btn-header" onclick="refreshData(this)">🔄 刷新数据</button>
+    <button class="btn btn-success" onclick="exportExcel(this)">📥 导出全部 Excel</button>
     <button class="btn btn-header" onclick="logout()">🚪 退出登录</button>
   </div>
 </div>
