@@ -347,6 +347,15 @@ function applyOrder(asin, kwList) {
   return ordered;
 }
 
+// 关键词行的首列：拖拽手柄 + 名称 + 删除按钮（删除按钮平时淡，悬停才醒目）
+function kwCell(asin, kw) {
+  const safeKw = kw.replace(/'/g, "\\'");
+  return '<td class="kw-cell td-prod">'
+    + '<span class="kw-name"><span class="grip">⋮⋮</span>' + kw + '</span>'
+    + '<span class="kw-del" onclick="event.stopPropagation();deleteKeyword(\'' + asin + '\',\'' + safeKw + '\')" title="删除此关键词">✕</span>'
+    + '</td>';
+}
+
 function renderPreview() {
   const container = document.getElementById('previewTable');
   const asin = activeTab;
@@ -358,35 +367,34 @@ function renderPreview() {
   for (const dd of Object.values(product.dates)) for (const kw of Object.keys(dd.keywords)) kwSet.add(kw);
   // 自然位与广告位共用同一顺序
   const orderedKws = applyOrder(asin, [...kwSet]);
-  
   if (dates.length === 0) { container.innerHTML = '<p style="color:#999;padding:20px;">该产品暂无数据</p>'; return; }
   
   let html = '<table class="preview"><thead>';
-  html += '<tr class="row-normal"><td class="td-date" style="font-weight:bold;">' + product.name + '<br><small>' + asin + '</small></td>';
+  html += '<tr class="row-normal"><td class="td-date td-prod">' + product.name + '<br><small>' + asin + '</small></td>';
   for (const d of dates) html += '<td class="td-date">' + formatDateChinese(d) + '</td>';
   html += '</tr>';
-  html += '<tr class="row-rank"><td class="td-rank" style="font-weight:bold;">Rank</td>';
+  html += '<tr class="row-rank"><td class="td-rank td-prod">Rank</td>';
   for (const d of dates) { const dd = product.dates[d]; html += '<td class="td-rank">' + (dd ? (dd.rank || '').replace(/\n/g, '<br>') : '') + '</td>'; }
   html += '</tr>';
-  html += '<tr class="row-normal"><td class="td-center">评分 / 评论</td>';
+  html += '<tr class="row-normal"><td class="td-center td-prod">评分 / 评论</td>';
   for (const d of dates) { const dd = product.dates[d]; html += '<td class="td-center">' + (dd ? dd.rating + ' / ' + dd.reviewCount : '') + '</td>'; }
   html += '</tr>';
   
   // Natural section
-  html += '<tr class="row-normal"><td class="td-section" colspan="' + (dates.length + 1) + '" style="background:#5B9BD5;color:#fff;">自然位-精准词</td></tr>';
+  html += '<tr class="row-normal"><td class="td-section" colspan="' + (dates.length + 1) + '">自然位-精准词</td></tr>';
   for (const kw of orderedKws) {
     html += '<tr class="row-normal kw-drag" draggable="true" data-kw="' + kw.replace(/"/g,'&quot;') + '" ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropKw(event)">';
-    html += '<td style="text-align:left;cursor:grab;">⋮⋮ ' + kw + ' <span style="color:#d93025;cursor:pointer;font-size:14px;" onclick="event.stopPropagation();deleteKeyword(\'' + asin + '\',\'' + kw.replace(/'/g,'\\\'') + '\')" title="删除此关键词">✕</span></td>';
+    html += kwCell(asin, kw);
     for (const d of dates) { const dd = product.dates[d]; html += '<td class="td-center">' + ((dd && dd.keywords[kw]) ? dd.keywords[kw].naturalPos : '') + '</td>'; }
     html += '</tr>';
   }
   html += '<tr class="row-normal"><td colspan="' + (dates.length + 1) + '" style="background:#f0f0f0;"></td></tr>';
   
   // Ad section（与自然位同一顺序）
-  html += '<tr class="row-normal"><td class="td-section" colspan="' + (dates.length + 1) + '" style="background:#5B9BD5;color:#fff;">广告位-精准词</td></tr>';
+  html += '<tr class="row-normal"><td class="td-section" colspan="' + (dates.length + 1) + '">广告位-精准词</td></tr>';
   for (const kw of orderedKws) {
     html += '<tr class="row-normal kw-drag" draggable="true" data-kw="' + kw.replace(/"/g,'&quot;') + '" ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropKw(event)">';
-    html += '<td style="text-align:left;cursor:grab;">⋮⋮ ' + kw + ' <span style="color:#d93025;cursor:pointer;font-size:14px;" onclick="event.stopPropagation();deleteKeyword(\'' + asin + '\',\'' + kw.replace(/'/g,'\\\'') + '\')" title="删除此关键词">✕</span></td>';
+    html += kwCell(asin, kw);
     for (const d of dates) { const dd = product.dates[d]; html += '<td class="td-center">' + ((dd && dd.keywords[kw]) ? dd.keywords[kw].adPos : '') + '</td>'; }
     html += '</tr>';
   }
