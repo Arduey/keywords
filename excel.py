@@ -107,14 +107,22 @@ def generate_xml(data, kw_order, product_order=None):
         p_kw_list.extend(sorted(remaining))
 
         # 冻结窗格：首列（关键词名/ASIN）+ 前 3 行（表头）
-        # 注意：Excel 2003 XML 里 <FreezePanes/> 与 <SplitHorizontal/Vertical> 语义冲突，
-        # 同时出现时 Excel 会忽略冻结，因此这里只用 Split 系列，不写 FreezePanes。
+        # SpreadsheetML 里这组标签必须齐全且取值正确，缺一不可，否则 Excel 会
+        # 退化成普通滚动（看不出冻结效果）：
+        #   FreezePanes + FrozenNoSplit  声明“冻结”而非“可拖动的拆分”
+        #   SplitHorizontal/TopRowBottomPane  上方固定 3 行
+        #   SplitVertical/LeftColumnRightPane 左侧固定 1 列
+        #   ActivePane=2 指向右下工作区；Panes 需列出各窗格的编号
         sheets += ('<Worksheet ss:Name="%s">\n<Table>\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n</Table>\n'
                    '<x:WorksheetOptions>\n'
+                   '<x:FreezePanes/><x:FrozenNoSplit/>\n'
                    '<x:SplitHorizontal>3</x:SplitHorizontal><x:TopRowBottomPane>3</x:TopRowBottomPane>\n'
                    '<x:SplitVertical>1</x:SplitVertical><x:LeftColumnRightPane>1</x:LeftColumnRightPane>\n'
-                   '<x:ActivePane>0</x:ActivePane>\n'
-                   '<x:Panes><x:Pane><x:Number>3</x:Number><x:ActiveRow>3</x:ActiveRow><x:ActiveCol>1</x:ActiveCol></x:Pane></x:Panes>\n'
+                   '<x:ActivePane>2</x:ActivePane>\n'
+                   '<x:Panes>\n'
+                   '<x:Pane><x:Number>3</x:Number></x:Pane>\n'
+                   '<x:Pane><x:Number>2</x:Number></x:Pane>\n'
+                   '</x:Panes>\n'
                    '<x:ActiveCol>%d</x:ActiveCol><x:ActiveRow>0</x:ActiveRow>\n'
                    '</x:WorksheetOptions>\n</Worksheet>\n') % (
             xml_esc(safe_name),
