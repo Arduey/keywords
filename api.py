@@ -108,6 +108,84 @@ def _looks_hashed(text):
     return "$" in text and ":" in text.split("$")[0]
 
 
+# ---------- 排序设置的读写 ----------
+# 关键词顺序与产品顺序都存在 settings 表里（JSON 文本），
+# 这样换电脑、换浏览器、清缓存都不会丢。
+
+_ORDER_KEYS = ("kw_order", "product_order")
+
+
+def _load_order(key):
+    """读取某份排序配置；不存在或损坏时返回合适的空值。
+
+    kw_order 存的是对象，product_order 存的是数组，
+    因此这里不能一律按 dict 校验，否则产品顺序会被误判为无效而丢弃。
+    """
+    conn = dbm.get_db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT `value` FROM settings WHERE `key` = %s", (key,))
+        row = cur.fetchone()
+    if not row or not row["value"]:
+        return [] if key == "product_order" else {}
+    try:
+        value = json.loads(row["value"])
+    except (ValueError, TypeError):
+        return [] if key == "product_order" else {}
+    if key == "product_order":
+        return value if isinstance(value, list) else []
+    return value if isinstance(value, dict) else {}
+
+
+def _save_order(key, value):
+    conn = dbm.get_db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO settings (`key`, `value`) VALUES (%s, %s) "
+            "ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
+    conn.commit()
+
+
+# ---------- GET/PUT /api/order ----------
+# GET  返回两份排序配置，前端一次性取回
+# PUT  提交排序；请求体形如 {"kw_order": {...}} 或 {"product_order": [...]}
+
+@api_bp.route("/order", methods=["GET", "PUT", "OPTIONS"])
+@require_auth
+def order():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    if request.method == "GET":
+        return jsonify({key: _load_order(key) for key in _ORDER_KEYS})
+
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "请求体不是合法的 JSON 对象"}), 400
+
+    saved = []
+    for key in _ORDER_KEYS:
+        if key not in body:
+            continue
+        value = body[key]
+        # kw_order 是 {asin: {natural: [...], ad: [...]}}；product_order 是 [asin, ...]
+        if key == "product_order":
+            if not isinstance(value, list):
+                return jsonify({"error": "product_order 应为数组"}), 400
+            if not all(isinstance(x, str) for x in value):
+                return jsonify({"error": "product_order 元素应为字符串"}), 400
+        else:
+            if not isinstance(value, dict):
+                return jsonify({"error": "kw_order 应为对象"}), 400
+        _save_order(key, value)
+        saved.append(key)
+
+    if not saved:
+        return jsonify({"error": "没有可保存的排序字段"}), 400
+    return jsonify({"status": "saved", "saved": saved})
+
+
 # ---------- POST /api/auth ----------
 
 @api_bp.route("/auth", methods=["POST", "OPTIONS"])
@@ -409,14 +487,23 @@ def export():
             "a": r["ad_pos"] or "",
         }
 
-    try:
-        kw_order = json.loads(request.args.get("order") or "{}")
-    except (ValueError, TypeError):
-        kw_order = {}
-    if not isinstance(kw_order, dict):
-        kw_order = {}
+    # 关键词顺序改从服务器读取（settings 表），不再依赖前端传参，
+    # 这样换浏览器、清缓存都不会影响导出结果的排列。
+    # 兼容：若前端仍传了 order 参数，则以参数为准（便于分享特定排序）。
+    param_order = request.args.get("order")
+    if param_order:
+        try:
+            kw_order = json.loads(param_order)
+        except (ValueError, TypeError):
+            kw_order = {}
+        if not isinstance(kw_order, dict):
+            kw_order = {}
+    else:
+        kw_order = _load_order("kw_order")
 
-    xml = excel.generate_xml(data, kw_order)
+    product_order = _load_order("product_order")
+
+    xml = excel.generate_xml(data, kw_order, product_order)
     return Response(
         xml,
         status=200,

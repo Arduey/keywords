@@ -16,6 +16,23 @@ _SHEET_NAME_ILLEGAL = re.compile(r"[\\/*?\[\]:]")
 _RANK_BREAK = re.compile(r"\s+#")
 
 
+def sort_asins(asins, product_order=None):
+    """按用户保存的产品顺序排列 ASIN，未列出的按字母序追加在后面。
+
+    与关键词排序同一套规则：先取已保存顺序中仍然存在的项，
+    再把剩余（新增或已删除后剩下的）按字母序接上，保证结果稳定且不丢产品。
+    """
+    remaining = set(asins)
+    ordered = []
+    if isinstance(product_order, (list, tuple)):
+        for asin in product_order:
+            if asin in remaining:
+                ordered.append(asin)
+                remaining.discard(asin)
+    ordered.extend(sorted(remaining))
+    return ordered
+
+
 def xml_esc(value):
     """XML 转义，顺序与原 JS 版 xmlEsc() 一致。"""
     if not value:
@@ -34,9 +51,13 @@ def date_to_serial(iso):
     return (datetime.date.fromisoformat(iso) - _DATE_BASE).days
 
 
-def generate_xml(data, kw_order):
-    """把 {asin: {name, dates: {date: {rating, reviewCount, rank, keywords}}}} 渲染成 Excel XML。"""
-    asins = sorted(data.keys())
+def generate_xml(data, kw_order, product_order=None):
+    """把 {asin: {name, dates: {date: {rating, reviewCount, rank, keywords}}}} 渲染成 Excel XML。
+
+    product_order 是用户拖拽出来的产品顺序（ASIN 列表）；
+    未列出的产品按 ASIN 升序追加在后面。
+    """
+    asins = sort_asins(data.keys(), product_order)
 
     all_dates = set()
     for asin in asins:

@@ -4,10 +4,50 @@ let pendingData = null;
 let allData = {};
 let activeTab = null;
 let authToken = localStorage.getItem('kw_auth') || '';
-// Keyword order per ASIN: { asin: { natural: [kw1, kw2, ...], ad: [kw1, kw2, ...] } }
-let kwOrder = JSON.parse(localStorage.getItem('kw_order') || '{}');
+// 关键词顺序：{ asin: { natural: [kw1, ...], ad: [kw1, ...] } }
+// 产品顺序：   [asin1, asin2, ...]
+// 两份都存在服务器（settings 表），换浏览器、清缓存都不会丢。
+let kwOrder = {};
+let productOrder = [];
+let orderDirty = false;   // 有未提交的改动时，定时器会把它存回服务器
+let orderTimer = null;
 
-function saveKwOrder() { localStorage.setItem('kw_order', JSON.stringify(kwOrder)); }
+async function loadOrder() {
+  try {
+    const resp = await apiFetch('/api/order');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    kwOrder = (data.kw_order && typeof data.kw_order === 'object') ? data.kw_order : {};
+    productOrder = Array.isArray(data.product_order) ? data.product_order : [];
+  } catch (e) { /* 读不到就先用空的，不影响使用 */ }
+}
+
+// 排序改动先留在内存并立即刷新界面，稍后再合并成一次提交，避免拖动时频繁写库。
+function saveOrder() {
+  orderDirty = true;
+  if (orderTimer) clearTimeout(orderTimer);
+  orderTimer = setTimeout(pushOrder, 600);
+}
+
+async function pushOrder() {
+  if (!orderDirty) return;
+  orderDirty = false;
+  try {
+    const resp = await apiFetch('/api/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kw_order: kwOrder, product_order: productOrder })
+    });
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      document.getElementById('statusBar').textContent = '排序保存失败: ' + (d.error || resp.status);
+    } else {
+      document.getElementById('statusBar').textContent = '排序已保存';
+    }
+  } catch (e) {
+    document.getElementById('statusBar').textContent = '排序保存失败: ' + e.message;
+  }
+}
 
 // ========== Auth ==========
 // 所有 /api 请求都要带登录令牌（X-Auth），令牌失效时退回登录页。
@@ -17,6 +57,8 @@ function authHeaders(extra) {
   return h;
 }
 function logout() {
+  // 离开前把尚未提交的排序改动存回去，避免拖动后马上退出导致丢失
+  if (orderDirty) { try { pushOrder(); } catch (e) {} }
   authToken = '';
   localStorage.removeItem('kw_auth');
   document.getElementById('mainApp').style.display = 'none';
@@ -49,7 +91,12 @@ async function verifyPassword() {
     else document.getElementById('loginError').style.display = 'block';
   } catch(e) { document.getElementById('loginError').style.display = 'block'; }
 }
-function showMain() { document.getElementById('loginOverlay').style.display = 'none'; document.getElementById('mainApp').style.display = 'block'; refreshData(); }
+async function showMain() {
+  document.getElementById('loginOverlay').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'block';
+  await loadOrder();     // 先把服务器上的排序取回来，再渲染
+  refreshData();
+}
 
 // ========== Data Loading ==========
 async function refreshData() {
@@ -85,7 +132,9 @@ async function importData() {
 }
 
 // ========== Export ==========
-function exportUrl(asin) { return asin ? '/api/export?asin=' + encodeURIComponent(asin) + '&order=' + encodeURIComponent(JSON.stringify(kwOrder[asin] || {})) : '/api/export?order=' + encodeURIComponent(JSON.stringify(kwOrder)); }
+// 导出时不再需要传 order：服务器已保存排序，后端会自己按它排列。
+// 这样即使换了浏览器或清了缓存，导出的顺序也保持一致。
+function exportUrl(asin) { return asin ? '/api/export?asin=' + encodeURIComponent(asin) : '/api/export'; }
 async function downloadExcel(asin) {
   try {
     const r = await apiFetch(exportUrl(asin));
@@ -170,7 +219,6 @@ function applyOrder(asin, kwList) {
   
   order.natural = resultNatural;
   order.ad = resultAd;
-  saveKwOrder();
   return { natural: resultNatural, ad: resultAd };
 }
 
@@ -249,7 +297,7 @@ function dropKw(e) {
   if (srcIdx >= 0 && tgtIdx >= 0) {
     list.splice(srcIdx, 1);
     list.splice(tgtIdx, 0, srcKw);
-    saveKwOrder();
+    saveOrder();
     renderPreview();
   }
 }
@@ -273,18 +321,72 @@ async function renameProduct(asin) {
   } catch(e) { alert('修改失败: ' + e.message); }
 }
 
+// 按保存的产品顺序排列；未列出的（新增产品）按字母序接在后面。
+function sortAsins(asins) {
+  const remaining = new Set(asins);
+  const ordered = [];
+  for (const a of productOrder) { if (remaining.has(a)) { ordered.push(a); remaining.delete(a); } }
+  for (const a of [...remaining].sort()) ordered.push(a);
+  return ordered;
+}
+
 function renderTabs() {
   const tabs = document.getElementById('productTabs');
-  const asins = Object.keys(allData).sort();
-  if (asins.length === 0) { tabs.innerHTML = '<span style="color:#999;padding:8px;">暂无数据</span>'; return; }
+  if (Object.keys(allData).length === 0) { tabs.innerHTML = '<span style="color:#999;padding:8px;">暂无数据</span>'; return; }
+  const asins = sortAsins(Object.keys(allData));
   tabs.innerHTML = asins.map(a => {
     const n = allData[a].name || a;
-    return `<div class="tab${a===activeTab?' active':''}">
+    return `<div class="tab${a===activeTab?' active':''}" draggable="true" data-asin="${a}" title="可拖动调整顺序"
+ ondragstart="tabDragStart(event)" ondragover="tabDragOver(event)" ondrop="tabDrop(event)" ondragend="tabDragEnd(event)">
 <span onclick="selectTab('${a}')">${n}<br><small>${a}</small></span>
 <span style="font-size:10px;color:#666;cursor:pointer;margin-left:4px;" onclick="event.stopPropagation();renameProduct('${a}')" title="修改名称">✎</span>
 </div>`;
   }).join('');
-  if (!activeTab || !asins.includes(activeTab)) { activeTab = asins[0]; tabs.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',asins[i]===activeTab)); }
+  if (!activeTab || !asins.includes(activeTab)) { activeTab = asins[0]; }
+  tabs.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.asin === activeTab));
+}
+
+// ========== 产品标签拖拽排序 ==========
+let tabDragSrc = null;
+
+function tabDragStart(e) {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  tabDragSrc = tab.dataset.asin;
+  e.dataTransfer.effectAllowed = 'move';
+  // Firefox 需要设置数据才会触发拖拽
+  try { e.dataTransfer.setData('text/plain', tabDragSrc); } catch (err) {}
+  tab.style.opacity = '0.5';
+}
+
+function tabDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+}
+
+function tabDragEnd(e) {
+  document.querySelectorAll('.tab').forEach(t => { t.style.opacity = ''; });
+  tabDragSrc = null;
+}
+
+function tabDrop(e) {
+  e.preventDefault();
+  const target = e.target.closest('.tab');
+  if (!target || !tabDragSrc) return;
+  const targetAsin = target.dataset.asin;
+  if (targetAsin === tabDragSrc) { tabDragEnd(e); return; }
+
+  // 以当前渲染顺序为基础调整，保证与界面所见一致
+  const list = sortAsins(Object.keys(allData));
+  const from = list.indexOf(tabDragSrc);
+  const to = list.indexOf(targetAsin);
+  if (from < 0 || to < 0) return;
+  list.splice(from, 1);
+  list.splice(to, 0, tabDragSrc);
+
+  productOrder = list;
+  saveOrder();
+  renderTabs();
 }
 
 function selectTab(asin) { activeTab = asin; renderTabs(); renderPreview(); }
