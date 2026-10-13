@@ -83,20 +83,14 @@ def _reinstall_unlocked(ip):
 def is_installed():
     """config.py 存在且标记为已安装。
 
-    优先读取模块属性而非匹配文本，这样 INSTALLED 两侧有没有空格都能正确识别；
-    只有在 config.py 无法导入（例如语法错误）时才退回文本判断。
+    直接读磁盘判定，不依赖进程内存中的模块状态：
+    多 worker 部署时，个别旧进程可能仍持有未安装的配置，
+    若按内存状态判断，会让部分请求被错误地重定向到安装向导
+    （表现为首页时好时坏、导入偶发返回 HTML 而不是 JSON）。
     """
     if not os.path.exists(CONFIG_PATH):
         return False
-    try:
-        return bool(getattr(config_loader.current_config(), "INSTALLED", False))
-    except Exception:
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                text = f.read()
-            return re.search(r"^\s*INSTALLED\s*=\s*True\b", text, re.M) is not None
-        except OSError:
-            return False
+    return config_loader.read_installed_flag()
 
 
 def _reload_config():

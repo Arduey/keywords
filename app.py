@@ -66,14 +66,26 @@ app.register_blueprint(install_bp)
 
 @app.before_request
 def _force_install():
-    """尚未完成安装时，把所有请求引导到安装向导。"""
+    """尚未完成安装时，把页面请求引导到安装向导。
+
+    API 请求不重定向：重定向会让前端收到 HTML，
+    报出 "Unexpected token '<' ... is not valid JSON" 这种难以理解错误，
+    所以对 /api 一律返回 JSON，前端能给出明确提示。
+    """
     from flask import request
 
-    if is_installed():
+    try:
+        if is_installed():
+            return None
+    except Exception:
+        # 配置异常时不要短路整个站点，交给具体视图去报错
         return None
+
     path = request.path
     if path.startswith("/install") or path == "/healthz":
         return None
+    if path.startswith("/api/"):
+        return jsonify({"error": "尚未完成安装，请先访问 /install 完成安装向导"}), 503
     return redirect("/install")
 
 

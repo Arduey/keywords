@@ -8,9 +8,14 @@
 
 因此所有读取配置的地方都走 current_config()：它会检查 config.py 的
 修改时间与大小，发现变化就重新加载，从而让每个 worker 都能自动跟上。
+
+另外提供 read_installed_flag()：直接读磁盘上的 INSTALLED 标记，
+不依赖模块内存状态，供 is_installed() 这类关键判断使用，
+避免个别进程残留旧配置时把用户错误地导向安装向导。
 """
 import importlib
 import os
+import re
 import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +23,8 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.py")
+
+_INSTALLED_RE = re.compile(r"^\s*INSTALLED\s*=\s*True\b", re.M)
 
 # 每个进程各自记录上一次看到的 config.py 状态
 _last_signature = None
@@ -57,3 +64,18 @@ def note_config_written():
     """写盘后调用，让本进程直接记住最新状态，省掉紧接着的一次多余重载。"""
     global _last_signature
     _last_signature = _signature()
+
+
+def read_installed_flag():
+    """直接读磁盘判断是否已完成安装。
+
+    刻意不依赖模块内存状态：多 worker 部署时，个别进程可能仍持有旧配置，
+    若用内存状态判断，会让一部分请求被错误地重定向到安装向导
+    （表现为「首页时好时坏」「导入偶发返回 HTML」）。
+    这里的判断只看磁盘文件，因此所有进程结论一致。
+    """
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return _INSTALLED_RE.search(f.read()) is not None
+    except OSError:
+        return False
