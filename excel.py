@@ -106,7 +106,17 @@ def generate_xml(data, kw_order, product_order=None):
                 remaining.discard(kw)
         p_kw_list.extend(sorted(remaining))
 
-        sheets += '<Worksheet ss:Name="%s">\n<Table>\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n</Table>\n<x:WorksheetOptions>\n<FreezePanes/><FrozenNoSplit/>\n<SplitHorizontal>3</SplitHorizontal><TopRowBottomPane>3</TopRowBottomPane>\n<SplitVertical>1</SplitVertical><LeftColumnRightPane>1</LeftColumnRightPane>\n<x:ActiveCol>%d</x:ActiveCol><x:ActiveRow>0</x:ActiveRow>\n</x:WorksheetOptions>\n</Worksheet>\n' % (
+        # 冻结窗格：首列（关键词名/ASIN）+ 前 3 行（表头）
+        # 注意：Excel 2003 XML 里 <FreezePanes/> 与 <SplitHorizontal/Vertical> 语义冲突，
+        # 同时出现时 Excel 会忽略冻结，因此这里只用 Split 系列，不写 FreezePanes。
+        sheets += ('<Worksheet ss:Name="%s">\n<Table>\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n</Table>\n'
+                   '<x:WorksheetOptions>\n'
+                   '<x:SplitHorizontal>3</x:SplitHorizontal><x:TopRowBottomPane>3</x:TopRowBottomPane>\n'
+                   '<x:SplitVertical>1</x:SplitVertical><x:LeftColumnRightPane>1</x:LeftColumnRightPane>\n'
+                   '<x:ActivePane>0</x:ActivePane>\n'
+                   '<x:Panes><x:Pane><x:Number>3</x:Number><x:ActiveRow>3</x:ActiveRow><x:ActiveCol>1</x:ActiveCol></x:Pane></x:Panes>\n'
+                   '<x:ActiveCol>%d</x:ActiveCol><x:ActiveRow>0</x:ActiveRow>\n'
+                   '</x:WorksheetOptions>\n</Worksheet>\n') % (
             xml_esc(safe_name),
             _col_defs(total_cols),
             _header_row(sorted_dates, xml_esc(product["name"]), extra_cols),
