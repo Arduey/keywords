@@ -78,29 +78,33 @@ def generate_xml(data, kw_order, product_order=None):
         for dd in product["dates"].values():
             p_kw_set.update(dd["keywords"].keys())
 
-        # 自定义顺序：单产品导出时前端传的是 {natural, ad}，
-        # 全量导出时传的是 {asin: {natural, ad}}，两种都要兼容。
-        # 对应 JS 的 `kwOrder[asin] || kwOrder || {}`：JS 里空对象 {} 是「真值」，
-        # 所以“存在但为空的对象”要原样采用，不能回退成整体顺序。
+        # 自定义顺序：自然位与广告位共用同一份列表 {asin: {keywords: [...]}}。
+        # 兼容早期存成 {natural: [...], ad: [...]} 的数据，合并成单一顺序。
         candidate = kw_order.get(asin)
         if isinstance(candidate, dict):
             order = candidate
         else:
             order = kw_order if isinstance(kw_order, dict) else {}
 
-        ordered_n, ordered_a = [], []
+        saved = []
+        if isinstance(order.get("keywords"), list):
+            saved = order["keywords"]
+        else:
+            # 旧格式：自然位优先，再接上广告位里多出来的
+            for kw in (order.get("natural") or []):
+                if kw not in saved:
+                    saved.append(kw)
+            for kw in (order.get("ad") or []):
+                if kw not in saved:
+                    saved.append(kw)
+
         remaining = set(p_kw_set)
-        for kw in order.get("natural") or []:
+        p_kw_list = []
+        for kw in saved:
             if kw in remaining:
-                ordered_n.append(kw)
+                p_kw_list.append(kw)
                 remaining.discard(kw)
-        for kw in order.get("ad") or []:
-            if kw in remaining:
-                ordered_a.append(kw)
-                remaining.discard(kw)
-        full_ordered = ordered_n + ordered_a + sorted(remaining)
-        # 保序去重，对应 JS 的 [...new Set(fullOrdered)]
-        p_kw_list = list(dict.fromkeys(full_ordered))
+        p_kw_list.extend(sorted(remaining))
 
         sheets += '<Worksheet ss:Name="%s">\n<Table>\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n</Table>\n<x:WorksheetOptions>\n<FreezePanes/><FrozenNoSplit/>\n<SplitHorizontal>3</SplitHorizontal><TopRowBottomPane>3</TopRowBottomPane>\n<SplitVertical>1</SplitVertical><LeftColumnRightPane>1</LeftColumnRightPane>\n<x:ActiveCol>%d</x:ActiveCol><x:ActiveRow>0</x:ActiveRow>\n</x:WorksheetOptions>\n</Worksheet>\n' % (
             xml_esc(safe_name),

@@ -4,7 +4,8 @@ let pendingData = null;
 let allData = {};
 let activeTab = null;
 let authToken = localStorage.getItem('kw_auth') || '';
-// 关键词顺序：{ asin: { natural: [kw1, ...], ad: [kw1, ...] } }
+// 关键词顺序：{ asin: { keywords: [kw1, kw2, ...] } }
+// 自然位与广告位共用同一顺序，拖动任一处都会调整这份列表。
 // 产品顺序：   [asin1, asin2, ...]
 // 两份都存在服务器（settings 表），换浏览器、清缓存都不会丢。
 let kwOrder = {};
@@ -198,28 +199,33 @@ async function confirmDelete() {
 }
 
 // ========== Drag to reorder ==========
-let dragSrcRow = null, dragSection = '';
+let dragSrcRow = null;
 
 function getKwOrder(asin) {
-  if (!kwOrder[asin]) kwOrder[asin] = { natural: [], ad: [] };
-  return kwOrder[asin];
+  if (!kwOrder[asin]) kwOrder[asin] = { keywords: [] };
+  const o = kwOrder[asin];
+  // 兼容早期存成 {natural, ad} 的历史数据，直接合并成单一顺序
+  if (!Array.isArray(o.keywords)) {
+    o.keywords = [];
+    for (const kw of (o.natural || [])) if (!o.keywords.includes(kw)) o.keywords.push(kw);
+    for (const kw of (o.ad || [])) if (!o.keywords.includes(kw)) o.keywords.push(kw);
+    delete o.natural;
+    delete o.ad;
+  }
+  return o;
 }
 
+// 自然位与广告位共用同一顺序：先按已保存的排列，新增关键词按字母序接在后面。
 function applyOrder(asin, kwList) {
   const order = getKwOrder(asin);
-  // Build ordered list: first from saved order, then append new unknown keywords
-  const resultNatural = [];
-  const resultAd = [];
-  const remainingN = new Set(kwList), remainingA = new Set(kwList);
-  
-  for (const kw of order.natural) { if (remainingN.has(kw)) { resultNatural.push(kw); remainingN.delete(kw); } }
-  for (const kw of remainingN) resultNatural.push(kw);
-  for (const kw of order.ad) { if (remainingA.has(kw)) { resultAd.push(kw); remainingA.delete(kw); } }
-  for (const kw of remainingA) resultAd.push(kw);
-  
-  order.natural = resultNatural;
-  order.ad = resultAd;
-  return { natural: resultNatural, ad: resultAd };
+  const ordered = [];
+  const remaining = new Set(kwList);
+  for (const kw of order.keywords) {
+    if (remaining.has(kw)) { ordered.push(kw); remaining.delete(kw); }
+  }
+  for (const kw of [...remaining].sort()) ordered.push(kw);
+  order.keywords = ordered;
+  return ordered;
 }
 
 function renderPreview() {
@@ -231,6 +237,7 @@ function renderPreview() {
   const dates = Object.keys(product.dates).sort();
   const kwSet = new Set();
   for (const dd of Object.values(product.dates)) for (const kw of Object.keys(dd.keywords)) kwSet.add(kw);
+  // 自然位与广告位共用同一顺序
   const orderedKws = applyOrder(asin, [...kwSet]);
   
   if (dates.length === 0) { container.innerHTML = '<p style="color:#999;padding:20px;">该产品暂无数据</p>'; return; }
@@ -248,18 +255,18 @@ function renderPreview() {
   
   // Natural section
   html += '<tr class="row-normal"><td class="td-section" colspan="' + (dates.length + 1) + '" style="background:#5B9BD5;color:#fff;">自然位-精准词</td></tr>';
-  for (const kw of orderedKws.natural) {
-    html += '<tr class="row-normal kw-drag" draggable="true" data-section="natural" data-kw="' + kw.replace(/"/g,'&quot;') + '" ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropKw(event)">';
+  for (const kw of orderedKws) {
+    html += '<tr class="row-normal kw-drag" draggable="true" data-kw="' + kw.replace(/"/g,'&quot;') + '" ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropKw(event)">';
     html += '<td style="text-align:left;cursor:grab;">⋮⋮ ' + kw + ' <span style="color:#d93025;cursor:pointer;font-size:14px;" onclick="event.stopPropagation();deleteKeyword(\'' + asin + '\',\'' + kw.replace(/'/g,'\\\'') + '\')" title="删除此关键词">✕</span></td>';
     for (const d of dates) { const dd = product.dates[d]; html += '<td class="td-center">' + ((dd && dd.keywords[kw]) ? dd.keywords[kw].naturalPos : '') + '</td>'; }
     html += '</tr>';
   }
   html += '<tr class="row-normal"><td colspan="' + (dates.length + 1) + '" style="background:#f0f0f0;"></td></tr>';
   
-  // Ad section
+  // Ad section（与自然位同一顺序）
   html += '<tr class="row-normal"><td class="td-section" colspan="' + (dates.length + 1) + '" style="background:#5B9BD5;color:#fff;">广告位-精准词</td></tr>';
-  for (const kw of orderedKws.ad) {
-    html += '<tr class="row-normal kw-drag" draggable="true" data-section="ad" data-kw="' + kw.replace(/"/g,'&quot;') + '" ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropKw(event)">';
+  for (const kw of orderedKws) {
+    html += '<tr class="row-normal kw-drag" draggable="true" data-kw="' + kw.replace(/"/g,'&quot;') + '" ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropKw(event)">';
     html += '<td style="text-align:left;cursor:grab;">⋮⋮ ' + kw + ' <span style="color:#d93025;cursor:pointer;font-size:14px;" onclick="event.stopPropagation();deleteKeyword(\'' + asin + '\',\'' + kw.replace(/'/g,'\\\'') + '\')" title="删除此关键词">✕</span></td>';
     for (const d of dates) { const dd = product.dates[d]; html += '<td class="td-center">' + ((dd && dd.keywords[kw]) ? dd.keywords[kw].adPos : '') + '</td>'; }
     html += '</tr>';
@@ -277,7 +284,6 @@ function renderPreview() {
 function dragStart(e) {
   dragSrcRow = e.target.closest('.kw-drag');
   if (!dragSrcRow) return;
-  dragSection = dragSrcRow.dataset.section;
   e.dataTransfer.effectAllowed = 'move';
 }
 
@@ -287,11 +293,11 @@ function dropKw(e) {
   e.preventDefault();
   const target = e.target.closest('.kw-drag');
   if (!target || !dragSrcRow || target === dragSrcRow) return;
-  if (target.dataset.section !== dragSection) return; // Only same section
   
   const asin = activeTab;
   const order = getKwOrder(asin);
-  const list = dragSection === 'natural' ? order.natural : order.ad;
+  // 自然位与广告位共用同一顺序，拖动任一处都调整这份列表
+  const list = order.keywords;
   const srcKw = dragSrcRow.dataset.kw, tgtKw = target.dataset.kw;
   const srcIdx = list.indexOf(srcKw), tgtIdx = list.indexOf(tgtKw);
   if (srcIdx >= 0 && tgtIdx >= 0) {
