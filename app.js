@@ -111,6 +111,15 @@ async function refreshData() {
 }
 
 // ========== Import (always force overwrite) ==========
+// 导入区默认收起，避免长期占用版面
+function toggleImport(force) {
+  const card = document.getElementById('importCard');
+  const open = (force === undefined) ? !card.classList.contains('open') : !!force;
+  card.classList.toggle('open', open);
+  document.getElementById('importTip').textContent = open ? '点击收起' : '点击展开';
+  if (open) document.getElementById('jsonInput').focus();
+}
+
 async function importData() {
   const input = document.getElementById('jsonInput').value.trim();
   if (!input) return alert('请粘贴 JSON 数据');
@@ -118,7 +127,7 @@ async function importData() {
   try { data = JSON.parse(input); } catch (e) {
     document.getElementById('importStatus').innerHTML = '<div class="alert alert-error">JSON 解析失败: ' + e.message + '</div>'; return;
   }
-  const btn = document.querySelector('.btn-primary');
+  const btn = document.getElementById('importBtn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 提交中...';
   document.getElementById('importStatus').innerHTML = '';
   try {
@@ -127,6 +136,8 @@ async function importData() {
     if (result.status === 'success') {
       document.getElementById('importStatus').innerHTML = '<div class="alert alert-success">✅ 导入成功！' + result.products + ' 个产品，' + result.rankings + ' 条排名记录</div>';
       document.getElementById('jsonInput').value = ''; refreshData();
+      // 导入完成即收起，把版面让给数据预览
+      setTimeout(() => toggleImport(false), 1500);
     } else throw new Error(result.error || 'Unknown error');
   } catch (err) { document.getElementById('importStatus').innerHTML = '<div class="alert alert-error">❌ 导入失败: ' + err.message + '</div>'; }
   btn.disabled = false; btn.innerHTML = '📤 提交数据';
